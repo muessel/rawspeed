@@ -24,6 +24,7 @@
 #include "common/Point.h"                           // for iPoint2D, iRecta...
 #include "decoders/RawDecoderException.h"           // for RawDecoderExcept...
 #include "decompressors/UncompressedDecompressor.h" // for UncompressedDeco...
+#include "decompressors/FujiDecompressor.h"
 #include "io/Buffer.h"                              // for Buffer
 #include "io/ByteStream.h"                          // for ByteStream
 #include "io/Endianness.h"                          // for getHostEndianness
@@ -78,6 +79,8 @@ RawImage RafDecoder::decodeRawInternal() {
   if (offsets->count != 1 || counts->count != 1)
     ThrowRDE("Multiple Strips found: %u %u", offsets->count, counts->count);
 
+  uint32 off = offsets->getU32();
+
   int bps = 16;
   if (raw->hasEntry(FUJI_BITSPERSAMPLE))
     bps = raw->getEntry(FUJI_BITSPERSAMPLE)->getU32();
@@ -100,7 +103,12 @@ RawImage RafDecoder::decodeRawInternal() {
   iPoint2D pos(0, 0);
 
   if (counts->getU32()*8/(width*height) < 10) {
-    ThrowRDE("Don't know how to decode compressed images");
+    mRaw->metadata.mode = "compressed";
+
+    FujiDecompressor fujiDecompress (input, mRaw, off);
+    fujiDecompress.fuji_compressed_load_raw();
+
+    //ThrowRDE("Don't know how to decode compressed images");
   } else if (double_width) {
     u.decodeRawUnpacked<16, little>(width * 2, height);
   } else if (input.isInNativeByteOrder() == (getHostEndianness() == big)) {
@@ -121,6 +129,15 @@ RawImage RafDecoder::decodeRawInternal() {
 void RafDecoder::checkSupportInternal(const CameraMetaData* meta) {
   if (!this->checkCameraSupported(meta, mRootIFD->getID(), ""))
     ThrowRDE("Unknown camera. Will not guess.");
+
+  if(isCompressed()) {
+    mRaw->metadata.mode = "compressed";
+
+    auto id = mRootIFD->getID();
+    const Camera* cam = meta->getCamera(id.make, id.model, mRaw->metadata.mode);
+
+    mRaw->cfa = cam->cfa;
+  }
 }
 
 void RafDecoder::decodeMetaDataInternal(const CameraMetaData* meta) {
@@ -132,7 +149,7 @@ void RafDecoder::decodeMetaDataInternal(const CameraMetaData* meta) {
   // This is where we'd normally call setMetaData but since we may still need
   // to rotate the image for SuperCCD cameras we do everything ourselves
   auto id = mRootIFD->getID();
-  const Camera* cam = meta->getCamera(id.make, id.model, "");
+  const Camera* cam = meta->getCamera(id.make, id.model, mRaw->metadata.mode);
   if (!cam)
     ThrowRDE("Couldn't find camera");
 
@@ -252,5 +269,29 @@ void RafDecoder::decodeMetaDataInternal(const CameraMetaData* meta) {
   }
 }
 
+int RafDecoder::isCompressed()
+{
+  auto raw = mRootIFD->getIFDWithTag(FUJI_STRIPOFFSETS);
+  uint32 height = 0;
+  uint32 width = 0;
+
+  if (raw->hasEntry(FUJI_RAWIMAGEFULLHEIGHT)) {
+    height = raw->getEntry(FUJI_RAWIMAGEFULLHEIGHT)->getU32();
+    width = raw->getEntry(FUJI_RAWIMAGEFULLWIDTH)->getU32();
+  } else if (raw->hasEntry(IMAGEWIDTH)) {
+    TiffEntry *e = raw->getEntry(IMAGEWIDTH);
+    height = e->getU16(0);
+    width = e->getU16(1);
+  } else
+    ThrowRDE("Unable to locate image size");
+
+  uint32 count = raw->getEntry(FUJI_STRIPBYTECOUNTS)->getU32();
+  if (count*8/(width*height) < 10) {
+    return 1;
+  } else {
+        return 0;
+  }
+
+}
 
 } // namespace RawSpeed

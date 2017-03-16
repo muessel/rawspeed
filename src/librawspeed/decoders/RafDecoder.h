@@ -48,6 +48,9 @@ protected:
   int getDecoderVersion() const override { return 1; }
   void DecodeRaf();
   bool alt_layout = false;
+
+private:
+  int isCompressed();
 };
 
 } // namespace RawSpeed
